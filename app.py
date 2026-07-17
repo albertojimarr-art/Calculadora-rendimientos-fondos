@@ -553,8 +553,23 @@ with tab_comparador:
             horizontal=True,
             key="tipo_comparador",
             help=(
-                "Se aplica a la anualización del mejor y peor mes de todos los "
-                "fondos seleccionados en este comparativo."
+                "Se aplica a la anualización del rendimiento del periodo y del "
+                "mejor y peor mes de todos los fondos seleccionados."
+            ),
+        )
+
+        alcance_indicadores = st.radio(
+            "Alcance de los indicadores",
+            [
+                "Periodo seleccionado",
+                "Histórico hasta la fecha final",
+            ],
+            horizontal=True,
+            key="alcance_indicadores",
+            help=(
+                "Periodo seleccionado calcula volatilidad, drawdown, mejor mes "
+                "y peor mes únicamente dentro del intervalo elegido. Histórico "
+                "usa toda la serie disponible hasta la fecha final."
             ),
         )
 
@@ -607,8 +622,17 @@ with tab_comparador:
                     serie_fondo.iloc[-1] / serie_fondo.iloc[0]
                 ) - 1
 
+                serie_completa = serie_valida(base_precios, nombre)
+
+                if alcance_indicadores == "Periodo seleccionado":
+                    serie_metricas = serie_completa.loc[
+                        fecha_real_inicial:fecha_real_final
+                    ]
+                else:
+                    serie_metricas = serie_completa.loc[:fecha_real_final]
+
                 met = metricas_fondo(
-                    serie_valida(base_precios, nombre),
+                    serie_metricas,
                     fecha_real_final,
                     tipo_comparador,
                 )
@@ -635,6 +659,7 @@ with tab_comparador:
                         "Máximo drawdown": met["Máximo drawdown"],
                         "Mejor mes anualizado": met["Mejor mes anualizado"],
                         "Peor mes anualizado": met["Peor mes anualizado"],
+                        "Alcance indicadores": alcance_indicadores,
                     }
                 )
 
@@ -702,6 +727,10 @@ with tab_comparador:
                     )
 
                 st.subheader("Resumen comparativo")
+                st.caption(
+                    f"Indicadores calculados con alcance: "
+                    f"{alcance_indicadores.lower()}."
+                )
 
                 def colorear_porcentaje(valor):
                     if not isinstance(valor, str) or valor == "N/D":

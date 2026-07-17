@@ -135,3 +135,25 @@ El resumen comparativo incorpora:
 - Descarga en Excel con dos hojas:
   - `Resumen comparativo`
   - `Serie Base 100`
+
+
+## Versión 6: alcance de indicadores en el comparador
+
+El comparador incluye un selector con dos opciones:
+
+### Periodo seleccionado
+
+Calcula únicamente con los precios comprendidos entre la fecha inicial y la fecha final elegidas:
+
+- Volatilidad anualizada.
+- Máximo drawdown.
+- Mejor mes anualizado.
+- Peor mes anualizado.
+
+Esta es la opción predeterminada y permite que todas las métricas correspondan al mismo periodo de análisis.
+
+### Histórico hasta la fecha final
+
+Calcula los indicadores usando toda la serie disponible del fondo desde su primer precio válido hasta la fecha final seleccionada.
+
+El rendimiento del periodo y su rendimiento anualizado siempre utilizan las fechas efectivas de inicio y fin del comparativo.
