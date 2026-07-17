@@ -12,8 +12,16 @@ import streamlit as st
 
 
 APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = APP_DIR / "data"
-META_FILE = DATA_DIR / "last_upload.json"
+
+# Carpeta del repositorio: solo para una base predeterminada opcional.
+REPO_DATA_DIR = APP_DIR / "data"
+
+# Carpeta temporal con permisos de escritura en Streamlit Cloud.
+# Puede borrarse cuando la app se reinicia o se vuelve a desplegar.
+RUNTIME_DATA_DIR = Path("/tmp/dashboard_fondos_data")
+RUNTIME_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+META_FILE = RUNTIME_DATA_DIR / "last_upload.json"
 SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 
 st.set_page_config(
@@ -21,8 +29,6 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
-
-DATA_DIR.mkdir(exist_ok=True)
 
 
 # -----------------------------
@@ -33,10 +39,10 @@ def guardar_ultima_base(nombre: str, contenido: bytes) -> Path:
     if extension not in SUPPORTED_EXTENSIONS:
         raise ValueError("Formato de archivo no soportado.")
 
-    for archivo in DATA_DIR.glob("last_base.*"):
+    for archivo in RUNTIME_DATA_DIR.glob("last_base.*"):
         archivo.unlink(missing_ok=True)
 
-    destino = DATA_DIR / f"last_base{extension}"
+    destino = RUNTIME_DATA_DIR / f"last_base{extension}"
     destino.write_bytes(contenido)
 
     META_FILE.write_text(
@@ -56,7 +62,7 @@ def obtener_base_guardada() -> tuple[Optional[Path], Optional[str]]:
 
     try:
         meta = json.loads(META_FILE.read_text(encoding="utf-8"))
-        ruta = DATA_DIR / meta["stored_name"]
+        ruta = RUNTIME_DATA_DIR / meta["stored_name"]
         if ruta.exists():
             return ruta, meta.get("original_name", ruta.name)
     except Exception:
@@ -136,26 +142,37 @@ def rendimiento_entre(
     return (precio_final / precio_inicial) - 1
 
 
+def anualizar_rendimiento(
+    rendimiento: Optional[float],
+    dias: int,
+    tipo_fondo: str,
+) -> Optional[float]:
+    if rendimiento is None or pd.isna(rendimiento) or dias <= 0:
+        return None
+
+    if tipo_fondo == "Deuda":
+        return float(rendimiento * (360 / dias))
+
+    if 1 + rendimiento <= 0:
+        return None
+
+    return float((1 + rendimiento) ** (360 / dias) - 1)
+
+
 def metricas_fondo(
     serie: pd.Series,
     fecha_corte: pd.Timestamp,
+    tipo_fondo: str,
 ) -> dict[str, Optional[float]]:
     serie = serie.loc[:fecha_corte].dropna().sort_index()
 
     if serie.empty:
         return {
-            "YTD": None,
-            "1 mes": None,
-            "3 meses": None,
-            "6 meses": None,
-            "1 año": None,
             "Volatilidad": None,
             "Máximo drawdown": None,
-            "Mejor mes": None,
-            "Peor mes": None,
+            "Mejor mes anualizado": None,
+            "Peor mes anualizado": None,
         }
-
-    inicio_ano = pd.Timestamp(year=fecha_corte.year, month=1, day=1)
 
     retornos_diarios = serie.pct_change().dropna()
     volatilidad = (
@@ -164,44 +181,57 @@ def metricas_fondo(
         else None
     )
 
-    maximos = serie.cummax()
-    drawdown = (serie / maximos) - 1
+    # Drawdown = precio actual / máximo histórico previo - 1.
+    # El máximo drawdown es la caída más profunda observada desde un pico.
+    maximos_acumulados = serie.cummax()
+    drawdown = (serie / maximos_acumulados) - 1
     max_drawdown = float(drawdown.min()) if not drawdown.empty else None
 
-    precios_mensuales = serie.resample("ME").last()
+    precios_mensuales = serie.resample("ME").last().dropna()
     retornos_mensuales = precios_mensuales.pct_change().dropna()
 
-    mejor_mes = (
-        float(retornos_mensuales.max())
-        if not retornos_mensuales.empty
-        else None
-    )
-    peor_mes = (
-        float(retornos_mensuales.min())
-        if not retornos_mensuales.empty
-        else None
-    )
+    mejor_mes_anualizado = None
+    peor_mes_anualizado = None
+
+    if not retornos_mensuales.empty:
+        registros = []
+
+        for fecha_fin, rendimiento_mes in retornos_mensuales.items():
+            posicion = precios_mensuales.index.get_loc(fecha_fin)
+            if posicion == 0:
+                continue
+
+            fecha_inicio = precios_mensuales.index[posicion - 1]
+            dias_mes = (fecha_fin - fecha_inicio).days
+
+            rendimiento_anualizado = anualizar_rendimiento(
+                float(rendimiento_mes),
+                dias_mes,
+                tipo_fondo,
+            )
+
+            if rendimiento_anualizado is not None:
+                registros.append(
+                    {
+                        "fecha": fecha_fin,
+                        "anualizado": rendimiento_anualizado,
+                    }
+                )
+
+        if registros:
+            anualizados = pd.Series(
+                [r["anualizado"] for r in registros],
+                index=[r["fecha"] for r in registros],
+            )
+            mejor_mes_anualizado = float(anualizados.max())
+            peor_mes_anualizado = float(anualizados.min())
 
     return {
-        "YTD": rendimiento_entre(serie, inicio_ano, fecha_corte),
-        "1 mes": rendimiento_entre(
-            serie, fecha_corte - pd.DateOffset(months=1), fecha_corte
-        ),
-        "3 meses": rendimiento_entre(
-            serie, fecha_corte - pd.DateOffset(months=3), fecha_corte
-        ),
-        "6 meses": rendimiento_entre(
-            serie, fecha_corte - pd.DateOffset(months=6), fecha_corte
-        ),
-        "1 año": rendimiento_entre(
-            serie, fecha_corte - pd.DateOffset(years=1), fecha_corte
-        ),
         "Volatilidad": volatilidad,
         "Máximo drawdown": max_drawdown,
-        "Mejor mes": mejor_mes,
-        "Peor mes": peor_mes,
+        "Mejor mes anualizado": mejor_mes_anualizado,
+        "Peor mes anualizado": peor_mes_anualizado,
     }
-
 
 def porcentaje(valor: Optional[float], decimales: int = 2) -> str:
     if valor is None or pd.isna(valor):
@@ -265,9 +295,9 @@ with st.sidebar:
         base_repo = next(
             (
                 p for p in [
-                    DATA_DIR / "base_predeterminada.xlsx",
-                    DATA_DIR / "base_predeterminada.xls",
-                    DATA_DIR / "base_predeterminada.csv",
+                    REPO_DATA_DIR / "base_predeterminada.xlsx",
+                    REPO_DATA_DIR / "base_predeterminada.xls",
+                    REPO_DATA_DIR / "base_predeterminada.csv",
                 ]
                 if p.exists()
             ),
@@ -418,21 +448,33 @@ with tab_calculadora:
 
         st.caption(f"{dias} días naturales · Metodología {metodologia}")
 
-        metricas = metricas_fondo(serie, ff)
+        metricas = metricas_fondo(serie, ff, tipo_fondo)
 
-        st.subheader("Indicadores al cierre seleccionado")
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("YTD", porcentaje(metricas["YTD"]))
-        m2.metric("1 mes", porcentaje(metricas["1 mes"]))
-        m3.metric("3 meses", porcentaje(metricas["3 meses"]))
-        m4.metric("6 meses", porcentaje(metricas["6 meses"]))
-        m5.metric("1 año", porcentaje(metricas["1 año"]))
+        st.subheader("Indicadores adicionales")
 
         n1, n2, n3, n4 = st.columns(4)
-        n1.metric("Volatilidad anualizada", porcentaje(metricas["Volatilidad"]))
-        n2.metric("Máximo drawdown", porcentaje(metricas["Máximo drawdown"]))
-        n3.metric("Mejor mes", porcentaje(metricas["Mejor mes"]))
-        n4.metric("Peor mes", porcentaje(metricas["Peor mes"]))
+        n1.metric(
+            "Volatilidad anualizada",
+            porcentaje(metricas["Volatilidad"])
+        )
+        n2.metric(
+            "Máximo drawdown",
+            porcentaje(metricas["Máximo drawdown"])
+        )
+        n3.metric(
+            "Mejor mes anualizado",
+            porcentaje(metricas["Mejor mes anualizado"])
+        )
+        n4.metric(
+            "Peor mes anualizado",
+            porcentaje(metricas["Peor mes anualizado"])
+        )
+
+        st.caption(
+            "El máximo drawdown mide la mayor caída desde un máximo acumulado "
+            "hasta el punto más bajo posterior. No se anualiza porque representa "
+            "una pérdida acumulada observada, no una tasa periódica."
+        )
 
         periodo = serie.loc[fi:ff].to_frame(name=fondo)
 
@@ -480,15 +522,10 @@ with tab_calculadora:
                 "Días": [dias],
                 "Rendimiento periodo": [rendimiento_periodo],
                 "Rendimiento anualizado": [rendimiento_anualizado],
-                "YTD": [metricas["YTD"]],
-                "1 mes": [metricas["1 mes"]],
-                "3 meses": [metricas["3 meses"]],
-                "6 meses": [metricas["6 meses"]],
-                "1 año": [metricas["1 año"]],
                 "Volatilidad anualizada": [metricas["Volatilidad"]],
                 "Máximo drawdown": [metricas["Máximo drawdown"]],
-                "Mejor mes": [metricas["Mejor mes"]],
-                "Peor mes": [metricas["Peor mes"]],
+                "Mejor mes anualizado": [metricas["Mejor mes anualizado"]],
+                "Peor mes anualizado": [metricas["Peor mes anualizado"]],
             }
         )
 
@@ -510,6 +547,17 @@ with tab_comparador:
     if len(fondos_comparar) < 2:
         st.info("Selecciona al menos dos fondos.")
     else:
+        tipo_comparador = st.radio(
+            "Metodología para indicadores mensuales",
+            ["Deuda", "Renta variable"],
+            horizontal=True,
+            key="tipo_comparador",
+            help=(
+                "Se aplica a la anualización del mejor y peor mes de todos los "
+                "fondos seleccionados en este comparativo."
+            ),
+        )
+
         datos_comparador = base_precios[fondos_comparar].copy()
 
         fecha_minima = datos_comparador.dropna(how="all").index.min().date()
@@ -562,6 +610,7 @@ with tab_comparador:
                 met = metricas_fondo(
                     serie_valida(base_precios, nombre),
                     fecha_real_final,
+                    tipo_comparador,
                 )
 
                 resumen.append(
@@ -570,15 +619,10 @@ with tab_comparador:
                         "Fecha inicial usada": fecha_real_inicial.date(),
                         "Fecha final usada": fecha_real_final.date(),
                         "Rendimiento periodo": rendimiento_periodo,
-                        "YTD": met["YTD"],
-                        "1 mes": met["1 mes"],
-                        "3 meses": met["3 meses"],
-                        "6 meses": met["6 meses"],
-                        "1 año": met["1 año"],
                         "Volatilidad anualizada": met["Volatilidad"],
                         "Máximo drawdown": met["Máximo drawdown"],
-                        "Mejor mes": met["Mejor mes"],
-                        "Peor mes": met["Peor mes"],
+                        "Mejor mes anualizado": met["Mejor mes anualizado"],
+                        "Peor mes anualizado": met["Peor mes anualizado"],
                     }
                 )
 
@@ -616,15 +660,10 @@ with tab_comparador:
 
                 columnas_pct = [
                     "Rendimiento periodo",
-                    "YTD",
-                    "1 mes",
-                    "3 meses",
-                    "6 meses",
-                    "1 año",
                     "Volatilidad anualizada",
                     "Máximo drawdown",
-                    "Mejor mes",
-                    "Peor mes",
+                    "Mejor mes anualizado",
+                    "Peor mes anualizado",
                 ]
 
                 tabla_mostrar = tabla.copy()

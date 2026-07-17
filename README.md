@@ -63,3 +63,58 @@ streamlit run app.py
 2. En Streamlit Cloud selecciona el repositorio.
 3. Usa `app.py` como archivo principal.
 4. Pulsa **Deploy**.
+
+
+## Corrección para Streamlit Cloud
+
+La última base cargada se almacena temporalmente en:
+
+```text
+/tmp/dashboard_fondos_data
+```
+
+Esto evita errores cuando existe un archivo o carpeta llamada `data` en el repositorio.
+
+La base predeterminada opcional continúa colocándose en:
+
+```text
+data/base_predeterminada.xlsx
+```
+
+En Streamlit Community Cloud, la última carga temporal puede perderse después de que la aplicación se reinicie, se suspenda o se vuelva a desplegar.
+
+
+## Versión 4: indicadores ajustados
+
+Se mantienen únicamente:
+
+- Volatilidad anualizada.
+- Máximo drawdown.
+- Mejor rendimiento mensual anualizado.
+- Peor rendimiento mensual anualizado.
+
+### Máximo drawdown
+
+Para cada fecha se calcula:
+
+```text
+precio actual / máximo histórico acumulado - 1
+```
+
+El máximo drawdown es el valor más negativo de esa serie. Representa la caída acumulada más profunda desde un máximo previo hasta un mínimo posterior. No se anualiza.
+
+### Anualización de rendimientos mensuales
+
+Se calcula primero el rendimiento entre cierres mensuales consecutivos.
+
+Para fondos de deuda:
+
+```text
+rendimiento mensual × 360 / días del periodo mensual
+```
+
+Para fondos de renta variable:
+
+```text
+(1 + rendimiento mensual) ^ (360 / días del periodo mensual) - 1
+```
