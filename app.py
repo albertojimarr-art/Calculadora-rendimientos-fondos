@@ -613,12 +613,24 @@ with tab_comparador:
                     tipo_comparador,
                 )
 
+                dias_efectivos = (
+                    fecha_real_final - fecha_real_inicial
+                ).days
+
+                rendimiento_anualizado = anualizar_rendimiento(
+                    float(rendimiento_periodo),
+                    dias_efectivos,
+                    tipo_comparador,
+                )
+
                 resumen.append(
                     {
                         "Fondo": nombre,
                         "Fecha inicial usada": fecha_real_inicial.date(),
                         "Fecha final usada": fecha_real_final.date(),
+                        "Días": dias_efectivos,
                         "Rendimiento periodo": rendimiento_periodo,
+                        "Rendimiento anualizado": rendimiento_anualizado,
                         "Volatilidad anualizada": met["Volatilidad"],
                         "Máximo drawdown": met["Máximo drawdown"],
                         "Mejor mes anualizado": met["Mejor mes anualizado"],
@@ -642,6 +654,10 @@ with tab_comparador:
                     .dropna()
                 )
 
+                grafica_larga["Rendimiento acumulado"] = (
+                    grafica_larga["Índice base 100"] / 100
+                ) - 1
+
                 fig_comp = px.line(
                     grafica_larga,
                     x=columna_fecha,
@@ -649,17 +665,30 @@ with tab_comparador:
                     color="Fondo",
                     title="Comparación normalizada · Base 100",
                     labels={columna_fecha: "Fecha"},
+                    custom_data=["Rendimiento acumulado"],
+                )
+
+                fig_comp.update_traces(
+                    hovertemplate=(
+                        "<b>%{fullData.name}</b><br>"
+                        "Fecha: %{x|%d/%m/%Y}<br>"
+                        "Índice base 100: %{y:.4f}<br>"
+                        "Rendimiento acumulado: %{customdata[0]:.2%}"
+                        "<extra></extra>"
+                    )
                 )
                 fig_comp.update_layout(hovermode="x unified")
                 st.plotly_chart(fig_comp, use_container_width=True)
 
                 tabla = pd.DataFrame(resumen).sort_values(
-                    "Rendimiento periodo",
+                    "Rendimiento anualizado",
                     ascending=False,
+                    na_position="last",
                 )
 
                 columnas_pct = [
                     "Rendimiento periodo",
+                    "Rendimiento anualizado",
                     "Volatilidad anualizada",
                     "Máximo drawdown",
                     "Mejor mes anualizado",
@@ -673,15 +702,112 @@ with tab_comparador:
                     )
 
                 st.subheader("Resumen comparativo")
+
+                def colorear_porcentaje(valor):
+                    if not isinstance(valor, str) or valor == "N/D":
+                        return ""
+                    try:
+                        numero = float(
+                            valor.replace("%", "").replace(",", "")
+                        )
+                    except ValueError:
+                        return ""
+
+                    if numero > 0:
+                        return "color: #1f8f4e; font-weight: 600;"
+                    if numero < 0:
+                        return "color: #c0392b; font-weight: 600;"
+                    return ""
+
+                columnas_color = [
+                    "Rendimiento periodo",
+                    "Rendimiento anualizado",
+                    "Máximo drawdown",
+                    "Mejor mes anualizado",
+                    "Peor mes anualizado",
+                ]
+
+                styled_table = tabla_mostrar.style.map(
+                    colorear_porcentaje,
+                    subset=columnas_color,
+                )
+
                 st.dataframe(
-                    tabla_mostrar,
+                    styled_table,
                     use_container_width=True,
                     hide_index=True,
                 )
 
+                salida_excel = io.BytesIO()
+
+                with pd.ExcelWriter(
+                    salida_excel,
+                    engine="openpyxl",
+                ) as writer:
+                    tabla.to_excel(
+                        writer,
+                        sheet_name="Resumen comparativo",
+                        index=False,
+                    )
+
+                    base100_export = base100.reset_index()
+                    base100_export.to_excel(
+                        writer,
+                        sheet_name="Serie Base 100",
+                        index=False,
+                    )
+
+                    hoja_resumen = writer.book["Resumen comparativo"]
+                    hoja_base100 = writer.book["Serie Base 100"]
+
+                    for hoja_excel in [hoja_resumen, hoja_base100]:
+                        hoja_excel.freeze_panes = "A2"
+                        hoja_excel.auto_filter.ref = hoja_excel.dimensions
+
+                        for columna in hoja_excel.columns:
+                            ancho = max(
+                                len(str(celda.value))
+                                if celda.value is not None else 0
+                                for celda in columna
+                            )
+                            letra = columna[0].column_letter
+                            hoja_excel.column_dimensions[letra].width = min(
+                                max(ancho + 2, 12),
+                                35,
+                            )
+
+                    encabezados = {
+                        celda.value: celda.column
+                        for celda in hoja_resumen[1]
+                    }
+
+                    for nombre_columna in [
+                        "Rendimiento periodo",
+                        "Rendimiento anualizado",
+                        "Volatilidad anualizada",
+                        "Máximo drawdown",
+                        "Mejor mes anualizado",
+                        "Peor mes anualizado",
+                    ]:
+                        numero_columna = encabezados.get(nombre_columna)
+                        if numero_columna:
+                            for fila in range(
+                                2,
+                                hoja_resumen.max_row + 1,
+                            ):
+                                hoja_resumen.cell(
+                                    row=fila,
+                                    column=numero_columna,
+                                ).number_format = "0.00%"
+
+                salida_excel.seek(0)
+
                 st.download_button(
-                    "Descargar comparativo",
-                    data=tabla.to_csv(index=False).encode("utf-8-sig"),
-                    file_name="comparativo_fondos.csv",
-                    mime="text/csv",
+                    "Descargar comparativo en Excel",
+                    data=salida_excel,
+                    file_name="comparativo_fondos.xlsx",
+                    mime=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
                 )

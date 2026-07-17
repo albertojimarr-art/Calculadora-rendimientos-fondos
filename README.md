@@ -118,3 +118,20 @@ Para fondos de renta variable:
 ```text
 (1 + rendimiento mensual) ^ (360 / días del periodo mensual) - 1
 ```
+
+
+## Versión 5: comparador mejorado
+
+El resumen comparativo incorpora:
+
+- Días efectivos de cada fondo.
+- Rendimiento del periodo.
+- Rendimiento anualizado según la metodología seleccionada:
+  - Deuda: simple, base 360.
+  - Renta variable: compuesta, base 360.
+- Ordenamiento de mayor a menor rendimiento anualizado.
+- Rendimientos positivos y negativos diferenciados visualmente.
+- Gráfica Base 100 con rendimiento acumulado en el tooltip.
+- Descarga en Excel con dos hojas:
+  - `Resumen comparativo`
+  - `Serie Base 100`
